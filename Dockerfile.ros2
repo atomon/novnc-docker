@@ -1,9 +1,10 @@
-FROM osrf/ros:jazzy-desktop
+FROM ros:jazzy
 
 ENV DEBIAN_FRONTEND=noninteractive
 
 # 描画スタックおよびnoVNC関連ツールのAPT一括インストール
 RUN apt-get update && apt-get install -y \
+    ros-jazzy-desktop \
     tigervnc-standalone-server \
     fluxbox \
     lxterminal \

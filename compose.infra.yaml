@@ -1,0 +1,28 @@
+services:
+  nginx_proxy:
+    image: nginx:alpine
+    container_name: nginx_proxy
+    network_mode: host
+    restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "nginx -t || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+
+  avahi_mdns:
+    image: alpine
+    container_name: avahi_mdns
+    network_mode: host
+    command: >
+      sh -c "apk add --no-cache avahi dbus avahi-tools &&
+      mkdir -p /run/dbus &&
+      rm -f /var/run/dbus/pid &&
+      dbus-daemon --system &&
+      avahi-daemon --no-drop-root"
+    restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "command -v avahi-publish && avahi-daemon -c"]
+      interval: 2s
+      timeout: 5s
+      retries: 15

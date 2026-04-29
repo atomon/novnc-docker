@@ -1,0 +1,15 @@
+[project]
+name = "novnc"
+version = "0.1.0"
+description = "Orchestrator for managing ROS 2 Jazzy noVNC sessions"
+readme = "README.md"
+authors = [{ name = "Ryohei Onishi" }]
+requires-python = ">=3.12"
+dependencies = []
+
+[project.scripts]
+novnc-manager = "orchestrator:main"
+
+[tool.uv]
+managed = true
+package = false

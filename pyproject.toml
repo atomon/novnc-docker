@@ -6,10 +6,3 @@ readme = "README.md"
 authors = [{ name = "Ryohei Onishi" }]
 requires-python = ">=3.12"
 dependencies = []
-
-[project.scripts]
-novnc-manager = "orchestrator:main"
-
-[tool.uv]
-managed = true
-package = false

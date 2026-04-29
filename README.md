@@ -75,6 +75,8 @@ python orchestrator.py start bob --type linux
 起動後、同一 LAN 内のブラウザから `http://<コンテナ名>.local` でアクセスできます。  
 VNC パスワードは不要です（`SecurityTypes None`）。
 
+すでに起動済みのセッションに再度 `start` を実行した場合はスキップされ、URL が表示されます。
+
 ### セッションの停止
 
 ```bash
@@ -82,6 +84,14 @@ python orchestrator.py stop alice
 ```
 
 コンテナの削除・Nginx 設定の削除・mDNS の登録解除を一括で行います。
+
+### セッション一覧の確認
+
+```bash
+python orchestrator.py list
+```
+
+起動中の全セッションと共有インフラ（`novnc_infra`）を一覧表示します。
 
 ## ポート割り当て
 
@@ -105,6 +115,21 @@ SESSION_ID は 10 から自動採番されます（最大 100 セッション）
 | `DOCKERFILE` | 使用する Dockerfile（`Dockerfile.ros2` または `Dockerfile.linux`） |
 | `IMAGE_NAME` | ビルド・使用するイメージ名 |
 | `ROS_DOMAIN_ID` | ROS 2 のドメイン ID（デフォルト: 0） |
+
+## インフラのバージョン管理
+
+インフラコンテナ（`nginx_proxy` / `avahi_mdns`）には `novnc.infra.version` ラベルが付与されており、バージョンが一致しない既存コンテナが検出された場合はエラーで停止します。
+
+```
+RuntimeError: 既存のインフラコンテナのバージョンが一致しません。先に停止してください: docker compose -f compose.infra.yaml down
+```
+
+古いインフラを停止してから再度 `start` を実行してください。
+
+```bash
+docker compose -f compose.infra.yaml down
+python orchestrator.py start alice
+```
 
 ## ライセンス
 

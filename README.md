@@ -1,7 +1,9 @@
 # novnc-docker
 
-ブラウザから ROS 2 Jazzy デスクトップ環境にアクセスできる、マルチユーザー対応のセッション管理システムです。  
-Docker + noVNC + Nginx + mDNS (Avahi) を組み合わせて、`http://<名前>.local` という URL でセッションに接続できます。
+ブラウザからデスクトップ環境にアクセスできる、マルチユーザー対応のセッション管理システムです。  
+Docker + noVNC + Nginx + mDNS (Avahi) を組み合わせて、`http://<コンテナ名>.local` という URL でセッションに接続できます。
+
+ROS 2 Jazzy と通常の Linux（Ubuntu 24.04）の 2 種類のセッションタイプをサポートします。
 
 ## アーキテクチャ
 
@@ -32,10 +34,18 @@ flowchart TB
 | コンポーネント | 役割 |
 |---|---|
 | `compose.infra.yaml` | 共有インフラ（Nginx・Avahi）。全セッションで 1 つだけ起動 |
-| `compose.session.yaml` | ROS 2 セッション。ユーザーごとに独立したスタックとして起動 |
-| `Dockerfile` | ROS 2 Jazzy + TigerVNC + noVNC + Fluxbox の環境イメージ |
+| `compose.session.yaml` | セッションコンテナ。ユーザーごとに独立したスタックとして起動 |
+| `Dockerfile.ros2` | ROS 2 Jazzy + TigerVNC + noVNC + Fluxbox の環境イメージ |
+| `Dockerfile.linux` | Ubuntu 24.04 + TigerVNC + noVNC + Fluxbox の環境イメージ |
 | `entrypoint.sh` | SESSION_ID に基づきポートを割り当てて VNC/noVNC を起動 |
 | `orchestrator.py` | セッションの起動・停止・Nginx 設定・mDNS 登録を自動化 |
+
+## セッションタイプ
+
+| `--type` | ベースイメージ | ビルドファイル | 用途 |
+|---|---|---|---|
+| `ros2`（デフォルト） | `osrf/ros:jazzy-desktop` | `Dockerfile.ros2` | ROS 2 Jazzy 開発環境 |
+| `linux` | `ubuntu:24.04` | `Dockerfile.linux` | 汎用 Linux デスクトップ |
 
 ## 前提条件
 
@@ -55,10 +65,14 @@ cd novnc-docker
 ### セッションの起動
 
 ```bash
+# ROS 2 セッション（デフォルト）
 python orchestrator.py start alice
+
+# Linux セッション
+python orchestrator.py start bob --type linux
 ```
 
-起動後、同一 LAN 内のブラウザから `http://alice.local` でアクセスできます。  
+起動後、同一 LAN 内のブラウザから `http://<コンテナ名>.local` でアクセスできます。  
 VNC パスワードは不要です（`SecurityTypes None`）。
 
 ### セッションの停止
@@ -88,16 +102,9 @@ SESSION_ID は 10 から自動採番されます（最大 100 セッション）
 |---|---|
 | `SESSION_ID` | セッションの識別番号（10〜109） |
 | `CONTAINER_NAME` | コンテナ名兼 mDNS ホスト名 |
+| `DOCKERFILE` | 使用する Dockerfile（`Dockerfile.ros2` または `Dockerfile.linux`） |
+| `IMAGE_NAME` | ビルド・使用するイメージ名 |
 | `ROS_DOMAIN_ID` | ROS 2 のドメイン ID（デフォルト: 0） |
-
-## ベースイメージ
-
-[osrf/ros:jazzy-desktop](https://hub.docker.com/r/osrf/ros/) をベースに以下を追加しています。
-
-- `tigervnc-standalone-server`
-- `fluxbox`（ウィンドウマネージャ）
-- `lxterminal`
-- `novnc` / `websockify`
 
 ## ライセンス
 

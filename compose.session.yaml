@@ -1,13 +1,13 @@
 services:
-  ros2_session:
-    build: .
-    image: ros2_novnc_desktop:jazzy
-    # オーケストレーターから注入される環境変数でコンテナ名を設定
+  session:
+    build:
+      context: .
+      dockerfile: ${DOCKERFILE:-Dockerfile.ros2}
+    image: ${IMAGE_NAME:-ros2_novnc_desktop:jazzy}
     container_name: ${CONTAINER_NAME:-default_session}
     network_mode: host
     shm_size: '512mb'
     environment:
-      # コンテナ内部のスクリプトへ渡す環境変数
       - SESSION_ID=${SESSION_ID:-1}
       - CONTAINER_NAME=${CONTAINER_NAME:-default_session}
       - ROS_DOMAIN_ID=0

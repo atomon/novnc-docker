@@ -15,11 +15,8 @@ RUN apt-get update && apt-get install -y \
     iputils-ping \
     && rm -rf /var/lib/apt/lists/*
 
-# エントリーポイントの配置と権限付与
 COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
-
-# ROS 2 Jazzy環境変数の自動ロード設定
-RUN echo "source /opt/ros/jazzy/setup.bash" >> /root/.bashrc
+RUN chmod +x /entrypoint.sh \
+    && echo "source /opt/ros/jazzy/setup.bash" >> /root/.bashrc
 
 ENTRYPOINT ["/entrypoint.sh"]

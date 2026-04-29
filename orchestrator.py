@@ -1,46 +1,41 @@
-"""Multi-user ROS 2 Session Manager using Docker Compose and mDNS Aliases.
-
-This script manages shared infrastructure (Nginx/mDNS) and individual ROS 2 sessions.
-It dynamically assigns SESSION_IDs and registers .local hostnames for each session.
-"""
+"""Multi-user ROS 2 Session Manager using Docker Compose and mDNS Aliases."""
 
 import argparse
 import os
-import subprocess
 import socket
-from typing import List
+import subprocess
 
-# 設定定数
 INFRA_COMPOSE_FILE = "compose.infra.yaml"
 SESSION_COMPOSE_FILE = "compose.session.yaml"
 NGINX_CONTAINER = "nginx_proxy"
 MDNS_CONTAINER = "avahi_mdns"
 
+SESSION_TYPES: dict[str, dict[str, str]] = {
+    "ros2": {"dockerfile": "Dockerfile.ros2", "image": "ros2_novnc_desktop:jazzy"},
+    "linux": {"dockerfile": "Dockerfile.linux", "image": "linux_novnc_desktop:latest"},
+}
+
 
 def get_host_ip() -> str:
-    """ホストマシンの物理IPアドレスを取得する。
+    """ホストマシンのプライマリIPアドレスを取得
 
     Returns:
-        str: ホストのプライマリIPアドレス。
+        ホストのIPアドレス。取得失敗時は "127.0.0.1"
     """
     try:
-        # ホストネットワークモードなので、物理ネットワークのIPを取得
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(("8.8.8.8", 80))
-        ip = s.getsockname()[0]
-        s.close()
-        return ip
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("8.8.8.8", 80))
+            return s.getsockname()[0]
     except Exception:
         return "127.0.0.1"
 
 
-def get_used_session_ids() -> List[int]:
-    """Nginxの設定ファイルから使用中のSESSION_IDを一覧取得する。
+def get_used_session_ids() -> list[int]:
+    """Nginx設定ファイルから使用中のSESSION_IDを取得
 
     Returns:
-        List[int]: 使用中のIDリスト。
+        使用中のSESSION_IDリスト
     """
-    used_ids: List[int] = []
     try:
         res = subprocess.run(
             [
@@ -55,36 +50,63 @@ def get_used_session_ids() -> List[int]:
             text=True,
             check=True,
         )
-        for line in res.stdout.strip().split("\n"):
-            if not line:
-                continue
-            filename = line.split("/")[-1]
-            session_id = int(filename.split("_")[1])
-            used_ids.append(session_id)
+        return [
+            int(line.split("/")[-1].split("_")[1])
+            for line in res.stdout.strip().split("\n")
+            if line
+        ]
     except subprocess.CalledProcessError:
-        pass
-    return used_ids
+        return []
 
 
-# DISPLAY番号とポートの衝突を避けるため、10番以降を使用する
 def get_free_session_id() -> int:
-    used_ids = set(get_used_session_ids())
+    """未使用のSESSION_IDを採番
+
+    Returns:
+        利用可能なSESSION_ID
+
+    Raises:
+        RuntimeError: SESSION_IDが上限（109）に達した場合
+    """
+    # DISPLAY番号とポートの衝突を避けるため、10番以降を使用
+    used = set(get_used_session_ids())
     for i in range(10, 110):
-        if i not in used_ids:
+        if i not in used:
             return i
     raise RuntimeError("利用可能なSESSION_IDが上限に達しました。")
 
 
-def apply_nginx_conf(session_id: int, container_name: str) -> None:
-    """Injects Nginx configuration for HTTP proxy.
+def nginx_reload() -> None:
+    """Nginxの設定をリロード"""
+    subprocess.run(
+        ["docker", "exec", NGINX_CONTAINER, "nginx", "-s", "reload"], check=True
+    )
+
+
+def session_compose(container_name: str, *args: str, **kwargs) -> None:
+    """セッションコンテナに対してdocker composeコマンドを実行
 
     Args:
-        session_id: Allocated unique ID for the session.
-        container_name: Name of the target container.
+        container_name: Composeプロジェクト名兼コンテナ名
+        *args: docker composeに渡すサブコマンドと引数
+        **kwargs: subprocess.runに渡す追加引数
+    """
+    subprocess.run(
+        ["docker", "compose", "-f", SESSION_COMPOSE_FILE, "-p", container_name, *args],
+        check=True,
+        **kwargs,
+    )
+
+
+def apply_nginx_conf(session_id: int, container_name: str) -> None:
+    """NginxにHTTPリバースプロキシ設定を注入してリロード
+
+    Args:
+        session_id: セッションの識別番号
+        container_name: コンテナ名（server_nameに使用）
     """
     port = 6080 + session_id
     conf_name = f"session_{session_id}_{container_name}.conf"
-
     conf_content = f"""
 server {{
     listen 80;
@@ -103,141 +125,135 @@ server {{
     }}
 }}
 """
-    write_cmd = [
-        "docker",
-        "exec",
-        "-i",
-        "nginx_proxy",
-        "sh",
-        "-c",
-        f"cat > /etc/nginx/conf.d/{conf_name}",
-    ]
-    subprocess.run(write_cmd, input=conf_content.encode("utf-8"), check=True)
-    subprocess.run(
-        ["docker", "exec", "nginx_proxy", "nginx", "-s", "reload"], check=True
-    )
-
-
-def publish_mdns_alias(container_name: str):
-    """Avahiコンテナ内でエイリアス（.local）をLAN内に公開する。"""
-    ip = get_host_ip()
-    alias = f"{container_name}.local"
-    # avahi-publish-addressをデタッチドモードで実行（エイリアス維持のため）
-    cmd = [
-        "docker",
-        "exec",
-        "-d",
-        MDNS_CONTAINER,
-        "avahi-publish-address",
-        "-R",
-        alias,
-        ip,
-    ]
-    subprocess.run(cmd, check=True)
-    print(f"[*] mDNS公開完了: {alias} -> {ip}")
-
-
-def unpublish_mdns_alias(container_name: str):
-    """終了時に該当するmDNSエイリアスの公開プロセスを停止する。"""
-    alias = f"{container_name}.local"
-    cmd = [
-        "docker",
-        "exec",
-        MDNS_CONTAINER,
-        "pkill",
-        "-f",
-        f"avahi-publish-address -R {alias}",
-    ]
-    subprocess.run(cmd, stderr=subprocess.DEVNULL)
-
-
-def start_session(container_name: str):
-    """セッションの開始（インフラ確認、コンテナ起動、Nginx、mDNS）"""
-    # インフラが死んでいる場合は起動
-    subprocess.run(
-        ["docker", "compose", "-f", INFRA_COMPOSE_FILE, "up", "--wait"],
-        check=True,
-    )
-
-    session_id = get_free_session_id()
-
-    # 実行環境変数の準備
-    env = os.environ.copy()
-    env["CONTAINER_NAME"] = container_name
-    env["SESSION_ID"] = str(session_id)
-
-    print(f"[*] セッション起動中: {container_name} (ID: {session_id})...")
-
-    # プロジェクト名をコンテナ名に指定し、独立したComposeスタックとして起動
     subprocess.run(
         [
             "docker",
-            "compose",
-            "-f",
-            SESSION_COMPOSE_FILE,
-            "-p",
-            container_name,
-            "up",
-            "-d",
+            "exec",
+            "-i",
+            NGINX_CONTAINER,
+            "sh",
+            "-c",
+            f"cat > /etc/nginx/conf.d/{conf_name}",
         ],
-        env=env,
+        input=conf_content.encode(),
         check=True,
     )
-
-    # ルーティングとmDNSの設定
-    apply_nginx_conf(session_id, container_name)
-    publish_mdns_alias(container_name)
-
-    print(f"[*] 準備完了: http://{container_name}.local")
+    nginx_reload()
 
 
-def stop_session(container_name: str):
-    """セッションの完全停止とクリーンアップ。"""
-    env = os.environ.copy()
-    env["CONTAINER_NAME"] = container_name
-    env["SESSION_ID"] = "0"
+def publish_mdns_alias(container_name: str) -> None:
+    """AvahiコンテナでmDNSエイリアスをLAN内に公開
 
-    print(f"[*] セッション停止中: {container_name}...")
-
-    # mDNS解除
-    unpublish_mdns_alias(container_name)
-
-    # Composeスタック削除
+    Args:
+        container_name: 公開するホスト名（.localサフィックスなし）
+    """
+    ip = get_host_ip()
+    alias = f"{container_name}.local"
+    # avahi-publish-addressをデタッチドモードで実行（エイリアス維持のため）
     subprocess.run(
-        ["docker", "compose", "-f", SESSION_COMPOSE_FILE, "-p", container_name, "down"],
-        env=env,
+        [
+            "docker",
+            "exec",
+            "-d",
+            MDNS_CONTAINER,
+            "avahi-publish-address",
+            "-R",
+            alias,
+            ip,
+        ],
         check=True,
+    )
+    print(f"[*] mDNS公開完了: {alias} -> {ip}")
+
+
+def unpublish_mdns_alias(container_name: str) -> None:
+    """AvahiコンテナのmDNS公開プロセスを停止
+
+    Args:
+        container_name: 停止するホスト名（.localサフィックスなし）
+    """
+    alias = f"{container_name}.local"
+    subprocess.run(
+        [
+            "docker",
+            "exec",
+            MDNS_CONTAINER,
+            "pkill",
+            "-f",
+            f"avahi-publish-address -R {alias}",
+        ],
         stderr=subprocess.DEVNULL,
     )
 
-    # Nginx設定削除
-    rm_cmd = [
-        "docker",
-        "exec",
-        NGINX_CONTAINER,
-        "sh",
-        "-c",
-        f"rm -f /etc/nginx/conf.d/session_*_{container_name}.conf",
-    ]
-    subprocess.run(rm_cmd, check=True)
+
+def start_session(container_name: str, session_type: str = "ros2") -> None:
+    """セッションを起動（インフラ確認・コンテナ起動・Nginx設定・mDNS登録）
+
+    Args:
+        container_name: 起動するセッションのコンテナ名
+        session_type: セッション種別（"ros2" または "linux"）
+    """
     subprocess.run(
-        ["docker", "exec", NGINX_CONTAINER, "nginx", "-s", "reload"], check=True
+        ["docker", "compose", "-f", INFRA_COMPOSE_FILE, "up", "--wait"], check=True
     )
 
+    session_id = get_free_session_id()
+    config = SESSION_TYPES[session_type]
+    env = {
+        **os.environ,
+        "CONTAINER_NAME": container_name,
+        "SESSION_ID": str(session_id),
+        "DOCKERFILE": config["dockerfile"],
+        "IMAGE_NAME": config["image"],
+    }
+
+    print(f"[*] セッション起動中: {container_name} (ID: {session_id})...")
+    # プロジェクト名をコンテナ名に指定し、独立したComposeスタックとして起動
+    session_compose(container_name, "up", "-d", env=env)
+    apply_nginx_conf(session_id, container_name)
+    publish_mdns_alias(container_name)
+    print(f"[*] 準備完了: http://{container_name}.local")
+
+
+def stop_session(container_name: str) -> None:
+    """セッションを完全停止してリソースをクリーンアップ
+
+    Args:
+        container_name: 停止するセッションのコンテナ名
+    """
+    print(f"[*] セッション停止中: {container_name}...")
+    unpublish_mdns_alias(container_name)
+    session_compose(container_name, "down", stderr=subprocess.DEVNULL)
+    subprocess.run(
+        [
+            "docker",
+            "exec",
+            NGINX_CONTAINER,
+            "sh",
+            "-c",
+            f"rm -f /etc/nginx/conf.d/session_*_{container_name}.conf",
+        ],
+        check=True,
+    )
+    nginx_reload()
     print("[*] クリーンアップ完了。")
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Multi-user ROS 2 Session Manager")
-    parser.add_argument("action", choices=["start", "stop"], help="Action to perform")
+def main() -> None:
+    """CLIエントリーポイント"""
+    parser = argparse.ArgumentParser(description="Multi-user Session Manager")
+    parser.add_argument("action", choices=["start", "stop"])
+    parser.add_argument("container_name")
     parser.add_argument(
-        "container_name", type=str, help="Name of the session container"
+        "--type",
+        choices=list(SESSION_TYPES),
+        default="ros2",
+        dest="session_type",
     )
-
     args = parser.parse_args()
 
     if args.action == "start":
-        start_session(args.container_name)
+        start_session(args.container_name, args.session_type)
     elif args.action == "stop":
         stop_session(args.container_name)
 

@@ -35,11 +35,14 @@ export DISPLAY=$DISPLAY_NUM
 lxterminal &
 fluxbox &
 
-# noVNCプロキシのパスを特定（Ubuntu 24.04ではPATHに登録されないためフォールバック）
-NOVNC_EXEC=$(command -v novnc_proxy || true)
-
-if [ -z "$NOVNC_EXEC" ]; then
+# noVNCプロキシのパスを特定
+if [ -f "/usr/bin/novnc_proxy" ]; then
+    NOVNC_EXEC="/usr/bin/novnc_proxy"
+elif [ -f "/usr/share/novnc/utils/novnc_proxy" ]; then
     NOVNC_EXEC="/usr/share/novnc/utils/novnc_proxy"
+else
+    # パッケージ内を検索
+    NOVNC_EXEC=$(which novnc_proxy || find /usr -name novnc_proxy | head -n 1)
 fi
 
 if [ ! -x "$NOVNC_EXEC" ]; then

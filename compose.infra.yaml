@@ -5,7 +5,7 @@ services:
     network_mode: host
     restart: always
     labels:
-      novnc.infra.version: "${INFRA_VERSION}"
+      novnc.infra.version: "${INFRA_VERSION:-1}"
     healthcheck:
       test: ["CMD-SHELL", "wget -q --spider http://localhost/ || exit 1"]
       interval: 5s
@@ -17,7 +17,7 @@ services:
     container_name: avahi_mdns
     network_mode: host
     labels:
-      novnc.infra.version: "${INFRA_VERSION}"
+      novnc.infra.version: "${INFRA_VERSION:-1}"
     command:
       - sh
       - -c

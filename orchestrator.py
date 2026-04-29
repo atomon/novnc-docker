@@ -1,6 +1,7 @@
 """Multi-user Session Manager using Docker Compose and mDNS Aliases."""
 
 import argparse
+import json
 import os
 import socket
 import subprocess
@@ -72,22 +73,16 @@ def ensure_infra() -> None:
     """インフラコンテナ（Nginx・Avahi）が正常稼働していなければ起動。バージョン不一致は警告して再起動"""
     try:
         result = subprocess.run(
-            [
-                "docker",
-                "inspect",
-                "-f",
-                '{{index .Config.Labels "novnc.infra.version"}}\t{{.State.Running}}',
-                NGINX_CONTAINER,
-                MDNS_CONTAINER,
-            ],
+            ["docker", "inspect", NGINX_CONTAINER, MDNS_CONTAINER],
             capture_output=True,
             text=True,
             check=True,
         )
-        lines = [line.strip() for line in result.stdout.strip().splitlines() if line]
-        if len(lines) == 2 and all(
-            ver == INFRA_VERSION and running == "true"
-            for ver, running in (line.split("\t") for line in lines)
+        containers: list[dict] = json.loads(result.stdout)
+        if len(containers) == 2 and all(
+            c["State"]["Running"]
+            and c.get("Config", {}).get("Labels", {}).get("novnc.infra.version") == INFRA_VERSION
+            for c in containers
         ):
             return
         print(

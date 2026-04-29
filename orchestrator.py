@@ -3,6 +3,7 @@
 import argparse
 import json
 import os
+import platform
 import socket
 import subprocess
 
@@ -13,6 +14,11 @@ NGINX_CONTAINER = "nginx_proxy"
 MDNS_CONTAINER = "avahi_mdns"
 INFRA_VERSION = "1"
 NGINX_PORT = 80
+NOVNC_BASE_PORT = 6080
+SESSION_ID_MIN = 10
+
+IS_MACOS = platform.system() == "Darwin"
+COMPOSE_PROFILE = "macos" if IS_MACOS else "linux"
 
 SESSION_TYPES: dict[str, dict[str, str]] = {
     "ros2": {"dockerfile": "Dockerfile.ros2", "image": "ros2_novnc_desktop:jazzy"},
@@ -34,12 +40,49 @@ def get_host_ip() -> str:
         return "127.0.0.1"
 
 
-def session_url(container_name: str) -> str:
-    """セッションのアクセス URL を生成
+def _get_session_id_from_label(container_name: str) -> int | None:
+    """コンテナラベルから SESSION_ID を取得
+
+    Args:
+        container_name: 検査対象のコンテナ名
 
     Returns:
-        ポートが 80 の場合はポートなし、それ以外はポート付き URL
+        SESSION_ID。取得失敗時は None
     """
+    try:
+        result = subprocess.run(
+            [
+                "docker",
+                "inspect",
+                "--format",
+                '{{index .Config.Labels "novnc.session.id"}}',
+                container_name,
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        val = result.stdout.strip()
+        return int(val) if val.isdigit() else None
+    except (subprocess.CalledProcessError, ValueError):
+        return None
+
+
+def session_url(container_name: str, session_id: int | None = None) -> str:
+    """セッションのアクセス URL を生成
+
+    Args:
+        container_name: セッションのコンテナ名
+        session_id: セッションID。None の場合はラベルから取得
+
+    Returns:
+        macOS: localhost の noVNC 直接 URL、Linux: mDNS ホスト名 URL
+    """
+    if IS_MACOS:
+        if session_id is None:
+            session_id = _get_session_id_from_label(container_name) or SESSION_ID_MIN
+        port = NOVNC_BASE_PORT + session_id
+        return f"http://localhost:{port}/vnc.html?autoconnect=true"
     host = f"{container_name}.local"
     return f"http://{host}" if NGINX_PORT == 80 else f"http://{host}:{NGINX_PORT}"
 
@@ -53,29 +96,44 @@ def get_free_session_id() -> int:
     Raises:
         RuntimeError: SESSION_IDが上限（109）に達した場合
     """
-    # DISPLAY番号とポートの衝突を避けるため、10番以降を使用
-    try:
+    if IS_MACOS:
         res = subprocess.run(
             [
                 "docker",
-                "exec",
-                NGINX_CONTAINER,
-                "sh",
-                "-c",
-                "ls /etc/nginx/conf.d/session_*.conf",
+                "ps",
+                "--filter",
+                "label=novnc.session.id",
+                "--format",
+                '{{.Label "novnc.session.id"}}',
             ],
             capture_output=True,
             text=True,
-            check=True,
+            check=False,
         )
-        used = {
-            int(line.split("/")[-1].split("_")[1])
-            for line in res.stdout.strip().splitlines()
-            if line
-        }
-    except subprocess.CalledProcessError:
-        used = set()
-    for i in range(10, 110):
+        used = {int(x) for x in res.stdout.splitlines() if x.strip().isdigit()}
+    else:
+        try:
+            res = subprocess.run(
+                [
+                    "docker",
+                    "exec",
+                    NGINX_CONTAINER,
+                    "sh",
+                    "-c",
+                    "ls /etc/nginx/conf.d/session_*.conf",
+                ],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            used = {
+                int(line.split("/")[-1].split("_")[1])
+                for line in res.stdout.strip().splitlines()
+                if line
+            }
+        except subprocess.CalledProcessError:
+            used = set()
+    for i in range(SESSION_ID_MIN, SESSION_ID_MIN + 100):
         if i not in used:
             return i
     raise RuntimeError("利用可能なSESSION_IDが上限に達しました。")
@@ -83,6 +141,8 @@ def get_free_session_id() -> int:
 
 def ensure_infra() -> None:
     """インフラコンテナ（Nginx・Avahi）が正常稼働していなければ起動。バージョン不一致はエラー"""
+    if IS_MACOS:
+        return
     try:
         result = subprocess.run(
             ["docker", "inspect", NGINX_CONTAINER, MDNS_CONTAINER],
@@ -135,7 +195,9 @@ def apply_nginx_conf(session_id: int, container_name: str) -> None:
         session_id: セッションの識別番号
         container_name: コンテナ名（server_nameに使用）
     """
-    port = 6080 + session_id
+    if IS_MACOS:
+        return
+    port = NOVNC_BASE_PORT + session_id
     conf_name = f"session_{session_id}_{container_name}.conf"
     conf_content = f"""
 server {{
@@ -171,12 +233,36 @@ server {{
     nginx_reload()
 
 
+def remove_nginx_conf(container_name: str) -> None:
+    """Nginxのセッション設定を削除してリロード（Linux のみ）
+
+    Args:
+        container_name: 削除対象のコンテナ名
+    """
+    if IS_MACOS:
+        return
+    subprocess.run(
+        [
+            "docker",
+            "exec",
+            NGINX_CONTAINER,
+            "sh",
+            "-c",
+            f"rm -f /etc/nginx/conf.d/session_*_{container_name}.conf",
+        ],
+        check=True,
+    )
+    nginx_reload()
+
+
 def publish_mdns_alias(container_name: str) -> None:
-    """AvahiコンテナでmDNSエイリアスをLAN内に公開
+    """AvahiコンテナでmDNSエイリアスをLAN内に公開（Linux のみ）
 
     Args:
         container_name: 公開するホスト名（.localサフィックスなし）
     """
+    if IS_MACOS:
+        return
     ip = get_host_ip()
     alias = f"{container_name}.local"
     # avahi-publish-addressをデタッチドモードで実行（エイリアス維持のため）
@@ -197,11 +283,13 @@ def publish_mdns_alias(container_name: str) -> None:
 
 
 def unpublish_mdns_alias(container_name: str) -> None:
-    """AvahiコンテナのmDNS公開プロセスを停止
+    """AvahiコンテナのmDNS公開プロセスを停止（Linux のみ）
 
     Args:
         container_name: 停止するホスト名（.localサフィックスなし）
     """
+    if IS_MACOS:
+        return
     alias = f"{container_name}.local"
     subprocess.run(
         [
@@ -225,7 +313,17 @@ def session_compose(container_name: str, *args: str, **kwargs) -> None:
         **kwargs: subprocess.runに渡す追加引数
     """
     subprocess.run(
-        ["docker", "compose", "-f", SESSION_COMPOSE_FILE, "-p", container_name, *args],
+        [
+            "docker",
+            "compose",
+            "-f",
+            SESSION_COMPOSE_FILE,
+            "-p",
+            container_name,
+            "--profile",
+            COMPOSE_PROFILE,
+            *args,
+        ],
         check=True,
         **kwargs,
     )
@@ -233,6 +331,9 @@ def session_compose(container_name: str, *args: str, **kwargs) -> None:
 
 def is_session_running(container_name: str) -> bool:
     """セッションコンテナの稼働状態を確認
+
+    Args:
+        container_name: 確認対象のコンテナ名
 
     Returns:
         コンテナが存在かつ running 状態であれば True
@@ -278,6 +379,7 @@ def start_session(container_name: str, session_type: str = "ros2") -> None:
         "SESSION_ID": str(session_id),
         "DOCKERFILE": config["dockerfile"],
         "IMAGE_NAME": config["image"],
+        "NOVNC_PORT": str(NOVNC_BASE_PORT + session_id),
     }
 
     print(f"[*] セッション起動中: {container_name} (ID: {session_id})...")
@@ -285,7 +387,7 @@ def start_session(container_name: str, session_type: str = "ros2") -> None:
     session_compose(container_name, "up", "-d", env=env)
     apply_nginx_conf(session_id, container_name)
     publish_mdns_alias(container_name)
-    print(f"[*] 準備完了: {session_url(container_name)}")
+    print(f"[*] 準備完了: {session_url(container_name, session_id)}")
 
 
 def stop_session(container_name: str) -> None:
@@ -297,18 +399,7 @@ def stop_session(container_name: str) -> None:
     print(f"[*] セッション停止中: {container_name}...")
     unpublish_mdns_alias(container_name)
     session_compose(container_name, "down", stderr=subprocess.DEVNULL)
-    subprocess.run(
-        [
-            "docker",
-            "exec",
-            NGINX_CONTAINER,
-            "sh",
-            "-c",
-            f"rm -f /etc/nginx/conf.d/session_*_{container_name}.conf",
-        ],
-        check=True,
-    )
-    nginx_reload()
+    remove_nginx_conf(container_name)
     print("[*] クリーンアップ完了。")
 
 

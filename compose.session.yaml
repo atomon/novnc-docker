@@ -1,13 +1,27 @@
+x-session: &session
+  build:
+    context: .
+    dockerfile: ${DOCKERFILE:-Dockerfile.ros2}
+  image: ${IMAGE_NAME:-ros2_novnc_desktop:jazzy}
+  container_name: ${CONTAINER_NAME:-default_session}
+  shm_size: '512mb'
+  labels:
+    novnc.session.id: "${SESSION_ID}"
+  environment:
+    - SESSION_ID=${SESSION_ID:-1}
+    - CONTAINER_NAME=${CONTAINER_NAME:-default_session}
+    - ROS_DOMAIN_ID=0
+
 services:
   session:
-    build:
-      context: .
-      dockerfile: ${DOCKERFILE:-Dockerfile.ros2}
-    image: ${IMAGE_NAME:-ros2_novnc_desktop:jazzy}
-    container_name: ${CONTAINER_NAME:-default_session}
+    <<: *session
     network_mode: host
-    shm_size: '512mb'
-    environment:
-      - SESSION_ID=${SESSION_ID:-1}
-      - CONTAINER_NAME=${CONTAINER_NAME:-default_session}
-      - ROS_DOMAIN_ID=0
+    profiles:
+      - linux
+
+  session_macos:
+    <<: *session
+    ports:
+      - "${NOVNC_PORT:-6080}:${NOVNC_PORT:-6080}"
+    profiles:
+      - macos

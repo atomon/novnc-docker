@@ -78,10 +78,14 @@ def ensure_infra() -> None:
             text=True,
             check=True,
         )
+    except subprocess.CalledProcessError:
+        pass  # コンテナが存在しない → compose up へ
+    else:
         containers: list[dict] = json.loads(result.stdout)
         if len(containers) == 2 and all(
             c["State"]["Running"]
-            and c.get("Config", {}).get("Labels", {}).get("novnc.infra.version") == INFRA_VERSION
+            and c.get("Config", {}).get("Labels", {}).get("novnc.infra.version")
+            == INFRA_VERSION
             for c in containers
         ):
             return
@@ -89,8 +93,6 @@ def ensure_infra() -> None:
             f"既存のインフラコンテナのバージョンが一致しません。先に停止してください: "
             f"docker compose -f {INFRA_COMPOSE_FILE} down"
         )
-    except subprocess.CalledProcessError:
-        pass
     subprocess.run(
         ["docker", "compose", "-f", INFRA_COMPOSE_FILE, "up", "--wait"],
         env={**os.environ, "INFRA_VERSION": INFRA_VERSION},
@@ -227,6 +229,11 @@ def is_session_running(container_name: str) -> bool:
         return False
 
 
+def list_sessions() -> None:
+    """起動中のセッション一覧を表示"""
+    subprocess.run(["docker", "compose", "ls"], check=False)
+
+
 def start_session(container_name: str, session_type: str = "ros2") -> None:
     """セッションを起動（インフラ確認・コンテナ起動・Nginx設定・mDNS登録）
 
@@ -235,7 +242,9 @@ def start_session(container_name: str, session_type: str = "ros2") -> None:
         session_type: セッション種別（"ros2" または "linux"）
     """
     if is_session_running(container_name):
-        print(f"[*] {container_name} はすでに起動しています。: http://{container_name}.local")
+        print(
+            f"[*] {container_name} はすでに起動しています。: http://{container_name}.local"
+        )
         return
 
     ensure_infra()
@@ -285,8 +294,8 @@ def stop_session(container_name: str) -> None:
 def main() -> None:
     """CLIエントリーポイント"""
     parser = argparse.ArgumentParser(description="Multi-user Session Manager")
-    parser.add_argument("action", choices=["start", "stop"])
-    parser.add_argument("container_name")
+    parser.add_argument("action", choices=["start", "stop", "list"])
+    parser.add_argument("container_name", nargs="?")
     parser.add_argument(
         "--type",
         choices=list(SESSION_TYPES),
@@ -299,6 +308,8 @@ def main() -> None:
         start_session(args.container_name, args.session_type)
     elif args.action == "stop":
         stop_session(args.container_name)
+    elif args.action == "list":
+        list_sessions()
 
 
 if __name__ == "__main__":

@@ -70,7 +70,7 @@ def get_free_session_id() -> int:
 
 
 def ensure_infra() -> None:
-    """インフラコンテナ（Nginx・Avahi）が正常稼働していなければ起動。バージョン不一致は警告して再起動"""
+    """インフラコンテナ（Nginx・Avahi）が正常稼働していなければ起動。バージョン不一致はエラー"""
     try:
         result = subprocess.run(
             ["docker", "inspect", NGINX_CONTAINER, MDNS_CONTAINER],
@@ -85,8 +85,9 @@ def ensure_infra() -> None:
             for c in containers
         ):
             return
-        print(
-            "[!] Warning: 既存のインフラコンテナが検出されましたが、バージョンが一致しません。再起動します。"
+        raise RuntimeError(
+            f"既存のインフラコンテナのバージョンが一致しません。先に停止してください: "
+            f"docker compose -f {INFRA_COMPOSE_FILE} down"
         )
     except subprocess.CalledProcessError:
         pass
@@ -207,6 +208,25 @@ def session_compose(container_name: str, *args: str, **kwargs) -> None:
     )
 
 
+def is_session_running(container_name: str) -> bool:
+    """セッションコンテナの稼働状態を確認
+
+    Returns:
+        コンテナが存在かつ running 状態であれば True
+    """
+    try:
+        result = subprocess.run(
+            ["docker", "inspect", container_name],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        containers: list[dict] = json.loads(result.stdout)
+        return bool(containers) and containers[0]["State"]["Running"]
+    except subprocess.CalledProcessError:
+        return False
+
+
 def start_session(container_name: str, session_type: str = "ros2") -> None:
     """セッションを起動（インフラ確認・コンテナ起動・Nginx設定・mDNS登録）
 
@@ -214,6 +234,10 @@ def start_session(container_name: str, session_type: str = "ros2") -> None:
         container_name: 起動するセッションのコンテナ名
         session_type: セッション種別（"ros2" または "linux"）
     """
+    if is_session_running(container_name):
+        print(f"[*] {container_name} はすでに起動しています。: http://{container_name}.local")
+        return
+
     ensure_infra()
 
     session_id = get_free_session_id()

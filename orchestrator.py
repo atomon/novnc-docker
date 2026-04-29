@@ -76,6 +76,24 @@ def get_free_session_id() -> int:
     raise RuntimeError("利用可能なSESSION_IDが上限に達しました。")
 
 
+def is_infra_running() -> bool:
+    """インフラコンテナ（Nginx・Avahi）の稼働状態を確認
+
+    Returns:
+        両コンテナが running 状態であれば True
+    """
+    try:
+        result = subprocess.run(
+            ["docker", "inspect", "-f", "{{.State.Running}}", NGINX_CONTAINER, MDNS_CONTAINER],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return all(line.strip() == "true" for line in result.stdout.strip().splitlines() if line)
+    except subprocess.CalledProcessError:
+        return False
+
+
 def nginx_reload() -> None:
     """Nginxの設定をリロード"""
     subprocess.run(
@@ -193,9 +211,10 @@ def start_session(container_name: str, session_type: str = "ros2") -> None:
         container_name: 起動するセッションのコンテナ名
         session_type: セッション種別（"ros2" または "linux"）
     """
-    subprocess.run(
-        ["docker", "compose", "-f", INFRA_COMPOSE_FILE, "up", "--wait"], check=True
-    )
+    if not is_infra_running():
+        subprocess.run(
+            ["docker", "compose", "-f", INFRA_COMPOSE_FILE, "up", "--wait"], check=True
+        )
 
     session_id = get_free_session_id()
     config = SESSION_TYPES[session_type]

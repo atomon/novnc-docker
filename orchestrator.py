@@ -7,6 +7,7 @@ import socket
 import subprocess
 
 INFRA_COMPOSE_FILE = "compose.infra.yaml"
+INFRA_PROJECT = "novnc_infra"
 SESSION_COMPOSE_FILE = "compose.session.yaml"
 NGINX_CONTAINER = "nginx_proxy"
 MDNS_CONTAINER = "avahi_mdns"
@@ -94,7 +95,7 @@ def ensure_infra() -> None:
             f"docker compose -f {INFRA_COMPOSE_FILE} down"
         )
     subprocess.run(
-        ["docker", "compose", "-f", INFRA_COMPOSE_FILE, "up", "--wait"],
+        ["docker", "compose", "-f", INFRA_COMPOSE_FILE, "-p", INFRA_PROJECT, "up", "--wait"],
         env={**os.environ, "INFRA_VERSION": INFRA_VERSION},
         check=True,
     )

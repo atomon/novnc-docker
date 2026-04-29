@@ -35,10 +35,14 @@ export DISPLAY=$DISPLAY_NUM
 lxterminal &
 fluxbox &
 
-# noVNCプロキシのパスを特定
-NOVNC_EXEC=$(command -v novnc_proxy)
+# noVNCプロキシのパスを特定（Ubuntu 24.04ではPATHに登録されないためフォールバック）
+NOVNC_EXEC=$(command -v novnc_proxy || true)
 
 if [ -z "$NOVNC_EXEC" ]; then
+    NOVNC_EXEC="/usr/share/novnc/utils/novnc_proxy"
+fi
+
+if [ ! -x "$NOVNC_EXEC" ]; then
     echo "Error: novnc_proxy not found. Please check if 'novnc' package is installed."
     exit 1
 fi

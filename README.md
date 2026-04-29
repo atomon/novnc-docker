@@ -1,11 +1,63 @@
 # novnc-docker
 
-ブラウザからデスクトップ環境にアクセスできる、マルチユーザー対応のセッション管理システムです。  
-Docker + noVNC + Nginx + mDNS (Avahi) を組み合わせて、`http://<コンテナ名>.local` という URL でセッションに接続できます。
+ブラウザからデスクトップ環境にアクセスできる、マルチユーザー対応のセッション管理システムです。
 
-ROS 2 Jazzy と通常の Linux（Ubuntu 24.04）の 2 種類のセッションタイプをサポートします。
+## 特長
 
-## アーキテクチャ
+- **macOS・Linux 両対応** — OS を問わず同じコマンドで操作できます
+- **マルチユーザー対応** — 複数セッションを同時起動でき、ポートは自動採番されます
+- **2 種類のセッションタイプ** — ROS 2 Jazzy 開発環境と汎用 Ubuntu 24.04 デスクトップ
+- **シンプルな CLI** — `start` / `stop` / `list` の 3 コマンドで操作完結
+- **Linux**: Nginx + mDNS (Avahi) 経由で `http://<コンテナ名>.local` から LAN 内アクセス
+- **macOS**: ポートマッピング経由で `http://localhost:<ポート>` からローカルアクセス
+
+## クイックスタート
+
+```bash
+# セッション起動（ROS 2）
+python orchestrator.py start alice
+
+# セッション起動（Ubuntu Linux）
+python orchestrator.py start bob --type linux
+
+# セッション停止
+python orchestrator.py stop alice
+
+# セッション一覧
+python orchestrator.py list
+```
+
+起動完了時にアクセス URL が表示されます。VNC パスワードは不要です。
+
+## セッションタイプ
+
+| `--type` | ベースイメージ | 用途 |
+|---|---|---|
+| `ros2`（デフォルト） | `ros:jazzy` | ROS 2 Jazzy 開発環境 |
+| `linux` | `ubuntu:24.04` | 汎用 Linux デスクトップ |
+
+## 前提条件
+
+- Docker（Compose プラグイン含む）
+- **Linux のみ**: LAN 内の他マシンから接続する場合は mDNS（Avahi）が利用可能な環境
+- **macOS**: Docker Desktop が動作すれば追加要件なし
+
+## インストール
+
+```bash
+git clone https://github.com/atomon/novnc-docker
+cd novnc-docker
+```
+
+---
+
+## 詳細
+
+### アーキテクチャ
+
+#### Linux
+
+Nginx がリバースプロキシとして機能し、Avahi が mDNS でホスト名を LAN に公開します。
 
 ```mermaid
 flowchart TB
@@ -29,6 +81,25 @@ flowchart TB
     Xvnc --> Desktop
 ```
 
+#### macOS
+
+Nginx・Avahi は起動せず、セッションコンテナのポートをホストに直接マッピングします。
+
+```mermaid
+flowchart TB
+    Browser["ブラウザ\nhttp://localhost:6080+SESSION_ID"]
+
+    subgraph session["compose.session.yaml（セッションコンテナ）"]
+        noVNC["noVNC\nポート 6080 + SESSION_ID"]
+        Xvnc["Xvnc\nポート 5900 + SESSION_ID"]
+        Desktop["Fluxbox + lxterminal"]
+    end
+
+    Browser -->|"ポートマッピング"| noVNC
+    noVNC -->|"VNC"| Xvnc
+    Xvnc --> Desktop
+```
+
 ### コンポーネント
 
 | コンポーネント | 役割 |
@@ -40,60 +111,7 @@ flowchart TB
 | `entrypoint.sh` | SESSION_ID に基づきポートを割り当てて VNC/noVNC を起動 |
 | `orchestrator.py` | セッションの起動・停止・Nginx 設定・mDNS 登録を自動化 |
 
-## セッションタイプ
-
-| `--type` | ベースイメージ | ビルドファイル | 用途 |
-|---|---|---|---|
-| `ros2`（デフォルト） | `osrf/ros:jazzy-desktop` | `Dockerfile.ros2` | ROS 2 Jazzy 開発環境 |
-| `linux` | `ubuntu:24.04` | `Dockerfile.linux` | 汎用 Linux デスクトップ |
-
-## 前提条件
-
-- Docker（Compose プラグイン含む）
-- Python 3.12 以上
-- LAN 内の他マシンから接続する場合は mDNS（Bonjour/Avahi）が利用可能な環境
-
-## インストール
-
-```bash
-git clone https://github.com/atomon/novnc-docker
-cd novnc-docker
-```
-
-## 使い方
-
-### セッションの起動
-
-```bash
-# ROS 2 セッション（デフォルト）
-python orchestrator.py start alice
-
-# Linux セッション
-python orchestrator.py start bob --type linux
-```
-
-起動後、同一 LAN 内のブラウザから `http://<コンテナ名>.local` でアクセスできます。  
-VNC パスワードは不要です（`SecurityTypes None`）。
-
-すでに起動済みのセッションに再度 `start` を実行した場合はスキップされ、URL が表示されます。
-
-### セッションの停止
-
-```bash
-python orchestrator.py stop alice
-```
-
-コンテナの削除・Nginx 設定の削除・mDNS の登録解除を一括で行います。
-
-### セッション一覧の確認
-
-```bash
-python orchestrator.py list
-```
-
-起動中の全セッションと共有インフラ（`novnc_infra`）を一覧表示します。
-
-## ポート割り当て
+### ポート割り当て
 
 SESSION_ID は 10 から自動採番されます（最大 100 セッション）。
 
@@ -103,29 +121,28 @@ SESSION_ID は 10 から自動採番されます（最大 100 セッション）
 | VNC | `5900 + SESSION_ID` |
 | noVNC (WebSocket) | `6080 + SESSION_ID` |
 
-同一ホスト上でセッションが増えても衝突しません。
-
-Nginx のポートを変更する場合は `orchestrator.py` の `NGINX_PORT` を編集します。80 以外のポートを指定すると、表示される URL に `:ポート番号` が付きます。
+Nginx のポートを変更する場合は `orchestrator.py` の `NGINX_PORT` を編集します。
 
 ```python
 NGINX_PORT = 8080  # http://alice.local:8080 でアクセス
 ```
 
-## 環境変数
+### 環境変数
 
-`compose.session.yaml` で参照される変数（`orchestrator.py` が自動で設定します）。
+`orchestrator.py` がセッション起動時に自動設定します。
 
 | 変数 | 説明 |
 |---|---|
 | `SESSION_ID` | セッションの識別番号（10〜109） |
 | `CONTAINER_NAME` | コンテナ名兼 mDNS ホスト名 |
-| `DOCKERFILE` | 使用する Dockerfile（`Dockerfile.ros2` または `Dockerfile.linux`） |
+| `DOCKERFILE` | 使用する Dockerfile |
 | `IMAGE_NAME` | ビルド・使用するイメージ名 |
+| `NOVNC_PORT` | noVNC のポート番号（`6080 + SESSION_ID`）。macOS のポートマッピングで使用 |
 | `ROS_DOMAIN_ID` | ROS 2 のドメイン ID（デフォルト: 0） |
 
-## インフラのバージョン管理
+### インフラのバージョン管理
 
-インフラコンテナ（`nginx_proxy` / `avahi_mdns`）には `novnc.infra.version` ラベルが付与されており、バージョンが一致しない既存コンテナが検出された場合はエラーで停止します。
+インフラコンテナ（`nginx_proxy` / `avahi_mdns`）にはバージョンラベルが付与されており、不一致が検出された場合はエラーで停止します。
 
 ```
 RuntimeError: 既存のインフラコンテナのバージョンが一致しません。先に停止してください: docker compose -f compose.infra.yaml down

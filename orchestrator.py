@@ -1,4 +1,4 @@
-"""Multi-user ROS 2 Session Manager using Docker Compose and mDNS Aliases."""
+"""Multi-user Session Manager using Docker Compose and mDNS Aliases."""
 
 import argparse
 import os
@@ -9,6 +9,7 @@ INFRA_COMPOSE_FILE = "compose.infra.yaml"
 SESSION_COMPOSE_FILE = "compose.session.yaml"
 NGINX_CONTAINER = "nginx_proxy"
 MDNS_CONTAINER = "avahi_mdns"
+INFRA_VERSION = "1"
 
 SESSION_TYPES: dict[str, dict[str, str]] = {
     "ros2": {"dockerfile": "Dockerfile.ros2", "image": "ros2_novnc_desktop:jazzy"},
@@ -30,12 +31,16 @@ def get_host_ip() -> str:
         return "127.0.0.1"
 
 
-def get_used_session_ids() -> list[int]:
-    """Nginx設定ファイルから使用中のSESSION_IDを取得
+def get_free_session_id() -> int:
+    """未使用のSESSION_IDを採番
 
     Returns:
-        使用中のSESSION_IDリスト
+        利用可能なSESSION_ID
+
+    Raises:
+        RuntimeError: SESSION_IDが上限（109）に達した場合
     """
+    # DISPLAY番号とポートの衝突を避けるため、10番以降を使用
     try:
         res = subprocess.run(
             [
@@ -50,69 +55,57 @@ def get_used_session_ids() -> list[int]:
             text=True,
             check=True,
         )
-        return [
+        used = {
             int(line.split("/")[-1].split("_")[1])
-            for line in res.stdout.strip().split("\n")
+            for line in res.stdout.strip().splitlines()
             if line
-        ]
+        }
     except subprocess.CalledProcessError:
-        return []
-
-
-def get_free_session_id() -> int:
-    """未使用のSESSION_IDを採番
-
-    Returns:
-        利用可能なSESSION_ID
-
-    Raises:
-        RuntimeError: SESSION_IDが上限（109）に達した場合
-    """
-    # DISPLAY番号とポートの衝突を避けるため、10番以降を使用
-    used = set(get_used_session_ids())
+        used = set()
     for i in range(10, 110):
         if i not in used:
             return i
     raise RuntimeError("利用可能なSESSION_IDが上限に達しました。")
 
 
-def is_infra_running() -> bool:
-    """インフラコンテナ（Nginx・Avahi）の稼働状態を確認
-
-    Returns:
-        両コンテナが running 状態であれば True
-    """
+def ensure_infra() -> None:
+    """インフラコンテナ（Nginx・Avahi）が正常稼働していなければ起動。バージョン不一致は警告して再起動"""
     try:
         result = subprocess.run(
-            ["docker", "inspect", "-f", "{{.State.Running}}", NGINX_CONTAINER, MDNS_CONTAINER],
+            [
+                "docker",
+                "inspect",
+                "-f",
+                '{{index .Config.Labels "novnc.infra.version"}}\t{{.State.Running}}',
+                NGINX_CONTAINER,
+                MDNS_CONTAINER,
+            ],
             capture_output=True,
             text=True,
             check=True,
         )
-        return all(line.strip() == "true" for line in result.stdout.strip().splitlines() if line)
+        lines = [line.strip() for line in result.stdout.strip().splitlines() if line]
+        if len(lines) == 2 and all(
+            ver == INFRA_VERSION and running == "true"
+            for ver, running in (line.split("\t") for line in lines)
+        ):
+            return
+        print(
+            "[!] Warning: 既存のインフラコンテナが検出されましたが、バージョンが一致しません。再起動します。"
+        )
     except subprocess.CalledProcessError:
-        return False
+        pass
+    subprocess.run(
+        ["docker", "compose", "-f", INFRA_COMPOSE_FILE, "up", "--wait"],
+        env={**os.environ, "INFRA_VERSION": INFRA_VERSION},
+        check=True,
+    )
 
 
 def nginx_reload() -> None:
     """Nginxの設定をリロード"""
     subprocess.run(
         ["docker", "exec", NGINX_CONTAINER, "nginx", "-s", "reload"], check=True
-    )
-
-
-def session_compose(container_name: str, *args: str, **kwargs) -> None:
-    """セッションコンテナに対してdocker composeコマンドを実行
-
-    Args:
-        container_name: Composeプロジェクト名兼コンテナ名
-        *args: docker composeに渡すサブコマンドと引数
-        **kwargs: subprocess.runに渡す追加引数
-    """
-    subprocess.run(
-        ["docker", "compose", "-f", SESSION_COMPOSE_FILE, "-p", container_name, *args],
-        check=True,
-        **kwargs,
     )
 
 
@@ -204,6 +197,21 @@ def unpublish_mdns_alias(container_name: str) -> None:
     )
 
 
+def session_compose(container_name: str, *args: str, **kwargs) -> None:
+    """セッションコンテナに対してdocker composeコマンドを実行
+
+    Args:
+        container_name: Composeプロジェクト名兼コンテナ名
+        *args: docker composeに渡すサブコマンドと引数
+        **kwargs: subprocess.runに渡す追加引数
+    """
+    subprocess.run(
+        ["docker", "compose", "-f", SESSION_COMPOSE_FILE, "-p", container_name, *args],
+        check=True,
+        **kwargs,
+    )
+
+
 def start_session(container_name: str, session_type: str = "ros2") -> None:
     """セッションを起動（インフラ確認・コンテナ起動・Nginx設定・mDNS登録）
 
@@ -211,10 +219,7 @@ def start_session(container_name: str, session_type: str = "ros2") -> None:
         container_name: 起動するセッションのコンテナ名
         session_type: セッション種別（"ros2" または "linux"）
     """
-    if not is_infra_running():
-        subprocess.run(
-            ["docker", "compose", "-f", INFRA_COMPOSE_FILE, "up", "--wait"], check=True
-        )
+    ensure_infra()
 
     session_id = get_free_session_id()
     config = SESSION_TYPES[session_type]

@@ -4,6 +4,8 @@ services:
     container_name: nginx_proxy
     network_mode: host
     restart: always
+    labels:
+      novnc.infra.version: "${INFRA_VERSION}"
     healthcheck:
       test: ["CMD-SHELL", "wget -q --spider http://localhost/ || exit 1"]
       interval: 5s
@@ -14,6 +16,8 @@ services:
     image: alpine
     container_name: avahi_mdns
     network_mode: host
+    labels:
+      novnc.infra.version: "${INFRA_VERSION}"
     command:
       - sh
       - -c

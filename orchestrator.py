@@ -12,6 +12,7 @@ SESSION_COMPOSE_FILE = "compose.session.yaml"
 NGINX_CONTAINER = "nginx_proxy"
 MDNS_CONTAINER = "avahi_mdns"
 INFRA_VERSION = "1"
+NGINX_PORT = 80
 
 SESSION_TYPES: dict[str, dict[str, str]] = {
     "ros2": {"dockerfile": "Dockerfile.ros2", "image": "ros2_novnc_desktop:jazzy"},
@@ -31,6 +32,16 @@ def get_host_ip() -> str:
             return s.getsockname()[0]
     except Exception:
         return "127.0.0.1"
+
+
+def session_url(container_name: str) -> str:
+    """セッションのアクセス URL を生成
+
+    Returns:
+        ポートが 80 の場合はポートなし、それ以外はポート付き URL
+    """
+    host = f"{container_name}.local"
+    return f"http://{host}" if NGINX_PORT == 80 else f"http://{host}:{NGINX_PORT}"
 
 
 def get_free_session_id() -> int:
@@ -95,7 +106,16 @@ def ensure_infra() -> None:
             f"docker compose -f {INFRA_COMPOSE_FILE} down"
         )
     subprocess.run(
-        ["docker", "compose", "-f", INFRA_COMPOSE_FILE, "-p", INFRA_PROJECT, "up", "--wait"],
+        [
+            "docker",
+            "compose",
+            "-f",
+            INFRA_COMPOSE_FILE,
+            "-p",
+            INFRA_PROJECT,
+            "up",
+            "--wait",
+        ],
         env={**os.environ, "INFRA_VERSION": INFRA_VERSION},
         check=True,
     )
@@ -119,7 +139,7 @@ def apply_nginx_conf(session_id: int, container_name: str) -> None:
     conf_name = f"session_{session_id}_{container_name}.conf"
     conf_content = f"""
 server {{
-    listen 80;
+    listen {NGINX_PORT};
     server_name {container_name}.local;
 
     location = / {{
@@ -244,7 +264,7 @@ def start_session(container_name: str, session_type: str = "ros2") -> None:
     """
     if is_session_running(container_name):
         print(
-            f"[*] {container_name} はすでに起動しています。: http://{container_name}.local"
+            f"[*] {container_name} はすでに起動しています。: {session_url(container_name)}"
         )
         return
 
@@ -265,7 +285,7 @@ def start_session(container_name: str, session_type: str = "ros2") -> None:
     session_compose(container_name, "up", "-d", env=env)
     apply_nginx_conf(session_id, container_name)
     publish_mdns_alias(container_name)
-    print(f"[*] 準備完了: http://{container_name}.local")
+    print(f"[*] 準備完了: {session_url(container_name)}")
 
 
 def stop_session(container_name: str) -> None:

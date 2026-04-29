@@ -99,10 +99,17 @@ SESSION_ID は 10 から自動採番されます（最大 100 セッション）
 
 | 用途 | ポート |
 |---|---|
+| Nginx (HTTP) | `NGINX_PORT`（デフォルト: `80`） |
 | VNC | `5900 + SESSION_ID` |
 | noVNC (WebSocket) | `6080 + SESSION_ID` |
 
 同一ホスト上でセッションが増えても衝突しません。
+
+Nginx のポートを変更する場合は `orchestrator.py` の `NGINX_PORT` を編集します。80 以外のポートを指定すると、表示される URL に `:ポート番号` が付きます。
+
+```python
+NGINX_PORT = 8080  # http://alice.local:8080 でアクセス
+```
 
 ## 環境変数
 
